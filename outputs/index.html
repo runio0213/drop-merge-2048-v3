@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>수학기호 게임</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./game.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <canvas id="symbolCanvas" width="1200" height="220" aria-hidden="true"></canvas>
+      <div class="brand-block">
+        <div class="brand-mark">∑</div>
+        <div>
+          <h1>수학기호 게임</h1>
+          <div class="subtitle">+ × log ! ↑ 연산으로 숫자를 키우는 환생형 증가 게임</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="icon-button" type="button" data-action="save" title="저장">∎</button>
+        <button class="icon-button danger" type="button" data-action="hardReset" title="초기화">↺</button>
+      </div>
+    </header>
+
+    <main class="game-layout">
+      <section class="number-board">
+        <div class="number-meta">
+          <span>현재 숫자</span>
+          <span id="tickRate">0.1초당 1</span>
+        </div>
+        <div id="numberDisplay" class="number-display">0</div>
+        <div class="stat-strip">
+          <div>
+            <span class="stat-label">초당</span>
+            <strong id="perSecond">1.000e1</strong>
+          </div>
+          <div>
+            <span class="stat-label">총 획득</span>
+            <strong id="totalEarned">0</strong>
+          </div>
+          <div>
+            <span class="stat-label">런 시간</span>
+            <strong id="runTime">0초</strong>
+          </div>
+        </div>
+        <div class="formula-line" id="formulaLine">1 × 업그레이드 × 환생</div>
+        <div class="quick-controls">
+          <button type="button" class="primary-action" data-action="manualTick">+ 연산</button>
+          <button type="button" class="secondary-action" data-action="buyBest">최적 구매</button>
+          <label class="toggle">
+            <input id="autoBest" type="checkbox">
+            <span>자동 최적</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel upgrades-panel">
+        <div class="panel-heading">
+          <h2>기본 업그레이드</h2>
+          <span id="upgradeSummary">고정 비용</span>
+        </div>
+        <div id="upgradeList" class="upgrade-list"></div>
+      </section>
+
+      <section class="panel prestige-panel">
+        <div class="panel-heading">
+          <h2>환생</h2>
+          <span id="prestigeSummary">log10 스케일</span>
+        </div>
+        <div id="prestigeList" class="prestige-grid"></div>
+      </section>
+
+      <section class="panel hyper-panel">
+        <div class="panel-heading">
+          <h2>환생v2</h2>
+          <button type="button" class="text-button" data-action="showMoreHyper">v단계 +3</button>
+        </div>
+        <div id="hyperList" class="hyper-list"></div>
+      </section>
+
+      <aside class="side-rail">
+        <section class="panel compact-panel">
+          <div class="panel-heading">
+            <h2>연산 상태</h2>
+            <span id="saveState">저장됨</span>
+          </div>
+          <div class="status-grid">
+            <div><span>증명 보너스</span><strong id="proofBonus">×1.00</strong></div>
+            <div><span>환생 스케일</span><strong id="scaleReadout">e0</strong></div>
+            <div><span>업그레이드 수</span><strong id="upgradeCount">0</strong></div>
+            <div><span>최적 효율</span><strong id="bestEfficiency">+1</strong></div>
+          </div>
+        </section>
+
+        <section class="panel compact-panel">
+          <div class="panel-heading">
+            <h2>수학 증명</h2>
+            <span id="proofCount">0/0</span>
+          </div>
+          <div id="achievementList" class="achievement-list"></div>
+        </section>
+      </aside>
+    </main>
+  </div>
+</body>
+</html>
