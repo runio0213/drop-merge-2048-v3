@@ -1,405 +1,472 @@
-```react
-import React, { useState, useEffect, useRef } from 'react';
-
-// 외부 수학 라이브러리 (OmegaNum.js) 로더 훅
-const useOmegaNum = () => {
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    if (window.OmegaNum) {
-      setLoaded(true);
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = "https://cdn.jsdelivr.net/npm/omeganum.js@1.1.2/omeganum.min.js";
-    script.async = true;
-    script.onload = () => {
-      window.ON = window.OmegaNum; // 전역 접근용 축약어
-      setLoaded(true);
-    };
-    document.body.appendChild(script);
-  }, []);
-  return loaded;
-};
-
-// 숫자 포맷터 (e, ee 표기법)
-const formatON = (num) => {
-  if (!num) return "0";
-  let ON = window.ON;
-  
-  if (num.lt(1000)) return Math.floor(num.toNumber()).toString();
-  if (num.lt(1e6)) return Math.floor(num.toNumber()).toLocaleString();
-  
-  // 1e6 ~ 1e1000 구간은 일반 e 표기
-  if (num.lt(ON.pow(10, 1000))) {
-    let log = num.log10().floor();
-    let mantissa = num.div(ON.pow(10, log)).toNumber();
-    return `${mantissa.toFixed(2)}e${log}`;
-  }
-  
-  // 엄청난 수 (예: e123456)
-  if (num.lt(ON.pow(10, 1e6))) {
-    return `e${Math.floor(num.log10().toNumber()).toLocaleString()}`;
-  }
-
-  // 그 이상은 ee 표기 (log-log)
-  let loglog = num.log10().log10().floor();
-  let mantissaLog = num.log10().div(ON.pow(10, loglog)).toNumber();
-  return `ee${loglog}`;
-};
-
-// 업그레이드 기본 스펙 (비용 고정)
-const UPGRADE_COSTS = [10, 500, 25000];
-const UPGRADE_AMOUNTS = [1, 20, 500];
-
-// 환생(Prestige) 티어 데이터 및 스케일 정의
-const PRESTIGE_DATA = [
-  { name: "환생 1", reqLog: 2, scale: 0.5, desc: "기본 배율에 1.1 거듭제곱 곱하기" },
-  { name: "환생 2", reqLog: 6, scale: 0.45, desc: "초당 50% 추가 생산 (배율 적용)" },
-  { name: "환생 3", reqLog: 20, scale: 0.4, desc: "전체 생산량을 1.05만큼 제곱", autoUp: true },
-  { name: "환생 4", reqLog: 80, scale: 0.35, desc: "숫자 log10에 +1 후 팩토리얼 배율 적용" },
-  { name: "환생 5", reqLog: 300, scale: 0.3, desc: "숫자 log-log에 +1 후 테트레이션 배율" },
-  { name: "환생 V2-1", reqLog: 1500, scale: 0.2, desc: "펜테이션 스케일 곱연산" },
-  { name: "환생 V2-2", reqLog: 8000, scale: 0.15, desc: "헥세이션 스케일 곱연산" },
-  { name: "환생 V2-3", reqLog: 40000, scale: 0.1, desc: "헵테이션 스케일 곱연산" }
-];
-
-export default function App() {
-  const isLoaded = useOmegaNum();
-  const [renderTick, setRenderTick] = useState(0);
-
-  // 게임 핵심 상태 (React 렌더링 부하를 줄이기 위해 useRef로 mutable 상태 관리)
-  const state = useRef({
-    score: null, // 초기화는 loaded 이후에 진행
-    production: null,
-    up: [],
-    prestiges: []
-  });
-
-  // 초기 상태 세팅
-  useEffect(() => {
-    if (isLoaded && !state.current.score) {
-      let ON = window.ON;
-      state.current.score = ON(0);
-      state.current.production = ON(0);
-      state.current.up = [ON(0), ON(0), ON(0)];
-      state.current.prestiges = Array(PRESTIGE_DATA.length).fill(ON(0));
-      
-      // 로컬 스토리지 데이터 로드 (최적화)
-      const saved = localStorage.getItem('math_game_save');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          state.current.score = ON(parsed.score);
-          state.current.up = parsed.up.map(v => ON(v));
-          state.current.prestiges = parsed.prestiges.map(v => ON(v));
-        } catch (e) {
-          console.error("세이브 로드 실패", e);
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>수학기호 게임</title>
+    <!-- Tailwind CSS (스타일링) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- OmegaNum.js (초거대수 연산 라이브러리) -->
+    <script src="https://cdn.jsdelivr.net/npm/omeganum.js@1.1.2/omeganum.min.js"></script>
+    <style>
+        /* 커스텀 스크롤바 및 애니메이션 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        @keyframes shimmer {
+            100% { transform: translateX(100%); }
         }
-      }
-      setRenderTick(t => t + 1);
-    }
-  }, [isLoaded]);
-
-  // 초당 생산량 계산 함수 (가장 효율적인 곱연산)
-  const calcProduction = () => {
-    let ON = window.ON;
-    const gs = state.current;
-    
-    // 기본 더하기 연산
-    let base = ON.add(gs.up[0].mul(UPGRADE_AMOUNTS[0]), gs.up[1].mul(UPGRADE_AMOUNTS[1])).add(gs.up[2].mul(UPGRADE_AMOUNTS[2]));
-    if (base.eq(0)) return base;
-
-    // 환생 1: 1.1 ^ R1
-    if (gs.prestiges[0].gt(0)) {
-      base = base.mul(ON.pow(1.1, gs.prestiges[0]));
-    }
-    
-    // 환생 2: 1 + 0.5 * R2
-    if (gs.prestiges[1].gt(0)) {
-      base = base.mul(ON.add(1, gs.prestiges[1].mul(0.5)));
-    }
-    
-    // 환생 3: 1.05 제곱
-    if (gs.prestiges[2].gt(0) && base.gt(1)) {
-      let r3_eff = ON.add(1, gs.prestiges[2].mul(0.05));
-      base = ON.pow(base, r3_eff);
-    }
-    
-    // 환생 4: log10(score)+1 의 팩토리얼 (Stirling 근사 사용)
-    if (gs.prestiges[3].gt(0)) {
-      let logS = gs.score.max(1).log10().floor().add(1);
-      let e = Math.E;
-      let pi = Math.PI;
-      // log10(x!) ≈ x*log10(x/e) + 0.5*log10(2*pi*x)
-      let term1 = logS.mul( ON.log10( logS.div(e) ) );
-      let term2 = ON.log10( logS.mul(2 * pi) ).mul(0.5);
-      let logFact = term1.add(term2).max(0);
-      let r4_eff = ON.pow(10, logFact).pow(gs.prestiges[3]);
-      base = base.mul(r4_eff);
-    }
-    
-    // 환생 5: log-log(score)+1 의 테트레이션
-    if (gs.prestiges[4].gt(0)) {
-      let llS = gs.score.max(10).log10().max(1).log10().floor().add(1);
-      let height = Math.min(10, llS.toNumber()); // 무한 루프/다운 방지
-      let r5_base_eff = ON.arrow(10, 2, height);
-      base = base.mul(ON.pow(r5_base_eff, gs.prestiges[4]));
-    }
-    
-    // 환생 V2-1 (펜테이션)
-    if (gs.prestiges[5].gt(0)) {
-      base = base.mul(ON.arrow(10, 3, gs.prestiges[5].add(1)));
-    }
-    // 환생 V2-2 (헥세이션)
-    if (gs.prestiges[6].gt(0)) {
-      base = base.mul(ON.arrow(10, 4, gs.prestiges[6].add(1)));
-    }
-    // 환생 V2-3 (헵테이션)
-    if (gs.prestiges[7].gt(0)) {
-      base = base.mul(ON.arrow(10, 5, gs.prestiges[7].add(1)));
-    }
-    
-    return base;
-  };
-
-  // 핵심 게임 루프 (0.1초마다)
-  useEffect(() => {
-    if (!isLoaded || !state.current.score) return;
-    
-    const interval = setInterval(() => {
-      let ON = window.ON;
-      const gs = state.current;
-      const prod = calcProduction();
-      gs.production = prod.mul(10); // 초당 생산량 표시용
-      gs.score = gs.score.add(prod); // 0.1초 틱 증가
-      
-      // 환생 3 시스템 (자동 구매)
-      if (gs.prestiges[2].gt(0)) {
-        for(let i=0; i<3; i++) {
-          let cost = ON(UPGRADE_COSTS[i]);
-          if (gs.score.gte(cost)) {
-            let amount = gs.score.div(cost).floor();
-            gs.score = gs.score.sub(amount.mul(cost));
-            gs.up[i] = gs.up[i].add(amount);
-          }
+        .shimmer-effect {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(to right, transparent, rgba(255,255,255,0.05), transparent);
+            transform: translateX(-100%);
+            animation: shimmer 2s infinite;
         }
-      }
-
-      setRenderTick(t => t + 1); // UI 업데이트
-    }, 100);
-
-    // 10초마다 자동 저장
-    const saveInterval = setInterval(() => {
-      const gs = state.current;
-      const saveData = {
-        score: gs.score.toString(),
-        up: gs.up.map(v => v.toString()),
-        prestiges: gs.prestiges.map(v => v.toString())
-      };
-      localStorage.setItem('math_game_save', JSON.stringify(saveData));
-    }, 10000);
-
-    return () => {
-      clearInterval(interval);
-      clearInterval(saveInterval);
-    };
-  }, [isLoaded]);
-
-  // 업그레이드 구매 (최대 구매)
-  const buyUpgrade = (idx) => {
-    let ON = window.ON;
-    let gs = state.current;
-    let cost = ON(UPGRADE_COSTS[idx]);
-    if (gs.score.gte(cost)) {
-      let amount = gs.score.div(cost).floor();
-      gs.score = gs.score.sub(amount.mul(cost));
-      gs.up[idx] = gs.up[idx].add(amount);
-      setRenderTick(t => t + 1);
-    }
-  };
-
-  // 환생 보상 계산 공식 (로그 스케일 및 효율 감소 적용)
-  const calcPrestigeReward = (tierIdx) => {
-    if (!window.ON || !state.current.score) return window.ON(0);
-    let ON = window.ON;
-    let data = PRESTIGE_DATA[tierIdx];
-    let logS = state.current.score.max(1).log10();
-    
-    if (logS.lt(data.reqLog)) return ON(0);
-    
-    // 보상 공식: (log10(Score) / 기준점) ^ 스케일계수
-    // 이 공식으로 인해 후반부로 갈수록 보상 획득 난이도가 기하급수적으로 증가 (로그 스케일화)
-    let ratio = logS.div(data.reqLog);
-    let reward = ratio.pow(data.scale).floor();
-    return reward;
-  };
-
-  // 환생 실행 및 계층적 초기화
-  const doPrestige = (tierIdx) => {
-    let reward = calcPrestigeReward(tierIdx);
-    if (reward.lte(0)) return;
-
-    let ON = window.ON;
-    let gs = state.current;
-
-    // 보상 지급
-    gs.prestiges[tierIdx] = gs.prestiges[tierIdx].add(reward);
-
-    // 시스템 기반 초기화: 대상 티어 미만의 모든 업그레이드 및 하위 환생 초기화
-    gs.score = ON(0);
-    gs.up = [ON(0), ON(0), ON(0)];
-    for (let i = 0; i < tierIdx; i++) {
-      gs.prestiges[i] = ON(0);
-    }
-    
-    setRenderTick(t => t + 1);
-  };
-
-  // 진행도 게이지 계산용
-  const getProgress = (tierIdx) => {
-    if (!window.ON || !state.current.score) return 0;
-    let logS = state.current.score.max(1).log10().toNumber();
-    let percent = (logS / PRESTIGE_DATA[tierIdx].reqLog) * 100;
-    return Math.min(100, Math.max(0, percent));
-  };
-
-  if (!isLoaded || !state.current.score) {
-    return <div className="flex h-screen items-center justify-center bg-slate-900 text-white text-2xl font-bold">수학 연산 모듈 로딩중...</div>;
-  }
-
-  const gs = state.current;
-
-  return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-4 font-sans selection:bg-cyan-500 selection:text-white">
-      {/* 헤더 파트 */}
-      <div className="max-w-6xl mx-auto text-center mb-8 pt-8">
-        <h1 className="text-4xl md:text-5xl font-black text-cyan-400 drop-shadow-md tracking-tight mb-6">
-          수학기호 게임 <span className="text-sm font-normal text-cyan-200 align-top">v1.0</span>
-        </h1>
         
-        <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 shadow-2xl backdrop-blur-sm inline-block min-w-[300px]">
-          <div className="text-gray-400 text-sm font-semibold mb-1">현재 숫자</div>
-          <div className="text-5xl md:text-7xl font-mono font-black text-white tracking-tighter">
-            {formatON(gs.score)}
-          </div>
-          <div className="text-cyan-300 font-mono mt-3 font-medium">
-            + {formatON(gs.production)} / 초
-          </div>
-        </div>
-      </div>
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, 'Helvetica Neue', 'Segoe UI', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col selection:bg-cyan-500 selection:text-white">
 
-      {/* 메인 게임 영역 */}
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <!-- 로딩 스크린 -->
+    <div id="loading" class="fixed inset-0 bg-slate-900 z-50 flex items-center justify-center text-2xl font-bold text-white">
+        수학 엔진 로딩중...
+    </div>
+
+    <div class="container mx-auto px-4 py-8 flex-1 flex flex-col max-w-6xl hidden" id="gameUI">
         
-        {/* 업그레이드 패널 */}
-        <div className="lg:col-span-4 bg-slate-800 border border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
-          <h2 className="text-xl font-bold text-slate-200 border-b border-slate-700 pb-2 flex justify-between items-center">
-            기본 연산
-            {gs.prestiges[2].gt(0) && <span className="text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full">자동 구매 켜짐</span>}
-          </h2>
-          
-          {[0, 1, 2].map(idx => {
-            let cost = window.ON(UPGRADE_COSTS[idx]);
-            let canBuy = gs.score.gte(cost);
-            return (
-              <button
-                key={idx}
-                onClick={() => buyUpgrade(idx)}
-                disabled={!canBuy}
-                className={`relative overflow-hidden group flex flex-col p-4 rounded-xl border text-left transition-all ${
-                  canBuy 
-                  ? 'bg-slate-700 border-slate-600 hover:bg-slate-600 hover:border-cyan-500 cursor-pointer shadow-md' 
-                  : 'bg-slate-800/50 border-slate-800 opacity-60 cursor-not-allowed'
-                }`}
-              >
-                <div className="flex justify-between items-start w-full z-10">
-                  <span className="font-bold text-lg">+{UPGRADE_AMOUNTS[idx]} / 틱</span>
-                  <span className="bg-slate-900 px-2 py-1 rounded text-xs font-mono text-cyan-300">보유: {formatON(gs.up[idx])}</span>
+        <!-- 헤더 / 점수 표시 영역 -->
+        <header class="text-center mb-8">
+            <h1 class="text-4xl md:text-5xl font-black text-cyan-400 drop-shadow-md tracking-tight mb-6">
+                수학기호 게임 <span class="text-sm font-normal text-cyan-200 align-top">Web Opt.</span>
+            </h1>
+            
+            <div class="bg-slate-800/80 border border-slate-700 rounded-2xl p-6 shadow-2xl backdrop-blur-sm inline-block min-w-[320px] max-w-full overflow-hidden">
+                <div class="text-gray-400 text-sm font-semibold mb-1">현재 숫자</div>
+                <div id="scoreDisplay" class="text-5xl md:text-6xl lg:text-7xl font-mono font-black text-white tracking-tighter break-all">
+                    0
                 </div>
-                <div className="mt-2 text-sm text-slate-400 z-10">
-                  비용: <span className="font-mono text-white">{formatON(cost)}</span> 고정 (최대 구매)
+                <div class="text-cyan-300 font-mono mt-3 font-medium text-lg md:text-xl">
+                    + <span id="productionDisplay">0</span> / 초
                 </div>
-                {canBuy && <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:animate-[shimmer_1.5s_infinite]"></div>}
-              </button>
-            )
-          })}
-          
-          <div className="mt-auto pt-4 text-xs text-slate-500 text-center">
-            * 모든 연산은 0.1초마다 실행되며, 각 효과는 곱연산으로 중첩됩니다.
-          </div>
-        </div>
+            </div>
+        </header>
 
-        {/* 환생 패널 */}
-        <div className="lg:col-span-8 bg-slate-800 border border-slate-700 rounded-2xl p-5 shadow-lg">
-          <h2 className="text-xl font-bold text-purple-300 border-b border-slate-700 pb-2 mb-4">
-            로그 스케일 환생 (Prestige)
-          </h2>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {PRESTIGE_DATA.map((data, idx) => {
-              let reward = calcPrestigeReward(idx);
-              let canPrestige = reward.gt(0);
-              let progress = getProgress(idx);
-              
-              return (
-                <div key={idx} className="bg-slate-900 border border-slate-700 rounded-xl p-4 flex flex-col relative overflow-hidden">
-                  {/* 프로그레스 바 배경 */}
-                  <div className="absolute bottom-0 left-0 h-1 bg-purple-900/50 w-full">
-                    <div className="h-full bg-purple-500 transition-all duration-300" style={{width: `${progress}%`}}></div>
-                  </div>
-                  
-                  <div className="flex justify-between items-center mb-2 z-10">
-                    <h3 className="font-bold text-purple-300 text-lg">{data.name}</h3>
-                    <span className="text-xs font-mono bg-purple-900/50 text-purple-200 px-2 py-1 rounded border border-purple-700/50">
-                      보유: {formatON(gs.prestiges[idx])}
-                    </span>
-                  </div>
-                  
-                  <p className="text-sm text-slate-400 mb-4 h-10 z-10">{data.desc}</p>
-                  
-                  <button
-                    onClick={() => doPrestige(idx)}
-                    disabled={!canPrestige}
-                    className={`mt-auto py-2 px-4 rounded-lg font-bold transition-all z-10 ${
-                      canPrestige
-                      ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] hover:shadow-[0_0_25px_rgba(168,85,247,0.6)]'
-                      : 'bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed'
-                    }`}
-                  >
-                    {canPrestige ? (
-                      <span>초기화 후 <span className="font-mono text-cyan-200">+{formatON(reward)}</span> 획득</span>
-                    ) : (
-                      <span className="text-xs">
-                        목표: e{data.reqLog} (현재: {progress.toFixed(1)}%)
-                      </span>
-                    )}
-                  </button>
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+            
+            <!-- 기본 업그레이드 패널 -->
+            <div class="lg:col-span-4 bg-slate-800 border border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col gap-4">
+                <div class="flex justify-between items-end border-b border-slate-700 pb-2 mb-2">
+                    <h2 class="text-xl font-bold text-slate-200">기본 연산</h2>
+                    <span id="autoBuyBadge" class="hidden text-xs bg-green-500/20 text-green-400 px-2 py-1 rounded-full font-bold">자동 구매 ON</span>
                 </div>
-              );
-            })}
-          </div>
+                <div id="upgradesContainer" class="flex flex-col gap-3">
+                    <!-- JS로 동적 생성됨 -->
+                </div>
+                <div class="mt-auto pt-4 text-xs text-slate-500 text-center leading-relaxed">
+                    * 모든 연산은 0.1초마다 실행되며, 각 효과는 최적의 곱연산으로 중첩됩니다.<br>
+                    * 비용은 항상 동일하며 가능한 최대 개수를 자동 구매합니다.
+                </div>
+            </div>
+
+            <!-- 환생(Prestige) 패널 -->
+            <div class="lg:col-span-8 bg-slate-800 border border-slate-700 rounded-2xl p-5 shadow-lg flex flex-col">
+                <h2 class="text-xl font-bold text-purple-300 border-b border-slate-700 pb-2 mb-4">
+                    로그 스케일 환생 (Prestige)
+                </h2>
+                
+                <div id="prestigeContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4 overflow-y-auto pr-2 custom-scrollbar">
+                    <!-- JS로 동적 생성됨 -->
+                </div>
+            </div>
+            
         </div>
         
-      </div>
-      
-      {/* 꼬리말/부가기능 */}
-      <div className="max-w-6xl mx-auto mt-6 flex justify-between items-center text-xs text-slate-500">
-        <div>저장 데이터는 브라우저에 자동 보관됩니다.</div>
-        <button 
-          onClick={() => {
-            if(window.confirm('게임을 완전히 초기화 하시겠습니까?')) {
-              localStorage.removeItem('math_game_save');
-              window.location.reload();
-            }
-          }}
-          className="hover:text-red-400 transition"
-        >
-          하드 리셋
-        </button>
-      </div>
+        <!-- 푸터 / 세이브 컨트롤 -->
+        <footer class="mt-8 flex flex-col sm:flex-row justify-between items-center text-xs text-slate-500 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+            <div class="mb-2 sm:mb-0">
+                데이터는 브라우저 로컬 스토리지에 자동 저장됩니다. (10초 주기)
+                <span id="saveStatus" class="ml-2 text-green-400 opacity-0 transition-opacity">저장됨!</span>
+            </div>
+            <div class="flex gap-4">
+                <button onclick="saveGame(true)" class="hover:text-cyan-400 transition">수동 저장</button>
+                <button onclick="hardReset()" class="hover:text-red-400 transition">하드 리셋</button>
+            </div>
+        </footer>
 
     </div>
-  );
-}
+
+    <script>
+        // === 게임 데이터 상수 ===
+        const UPGRADE_COSTS = [10, 500, 25000];
+        const UPGRADE_AMOUNTS = [1, 20, 500];
+
+        const PRESTIGE_DATA = [
+            { name: "환생 1", reqLog: 2, scale: 0.5, desc: "기본 배율에 1.1 거듭제곱 곱하기" },
+            { name: "환생 2", reqLog: 6, scale: 0.45, desc: "초당 50% 추가 생산 (배율 적용)" },
+            { name: "환생 3", reqLog: 20, scale: 0.4, desc: "전체 생산량을 1.05만큼 제곱 (기본연산 자동구매)" },
+            { name: "환생 4", reqLog: 80, scale: 0.35, desc: "숫자 log10에 +1 후 팩토리얼 배율 적용" },
+            { name: "환생 5", reqLog: 300, scale: 0.3, desc: "숫자 log-log에 +1 후 테트레이션 배율" },
+            { name: "환생 V2-1", reqLog: 1500, scale: 0.2, desc: "펜테이션 스케일 곱연산" },
+            { name: "환생 V2-2", reqLog: 8000, scale: 0.15, desc: "헥세이션 스케일 곱연산" },
+            { name: "환생 V2-3", reqLog: 40000, scale: 0.1, desc: "헵테이션 스케일 곱연산" }
+        ];
+
+        // === 게임 상태 (State) ===
+        let ON; // OmegaNum 전역 객체
+        let gameState = {
+            score: null,
+            production: null,
+            up: [],
+            prestiges: []
+        };
+
+        // DOM 캐싱 (성능 최적화용)
+        const DOM = {
+            score: document.getElementById('scoreDisplay'),
+            prod: document.getElementById('productionDisplay'),
+            upgrades: [],
+            prestiges: [],
+            autoBuyBadge: document.getElementById('autoBuyBadge'),
+            saveStatus: document.getElementById('saveStatus')
+        };
+
+        // === 초기화 및 로드 ===
+        window.onload = () => {
+            if (typeof OmegaNum === 'undefined') {
+                alert('수학 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인해주세요.');
+                return;
+            }
+            ON = OmegaNum;
+            initGame();
+            document.getElementById('loading').classList.add('hidden');
+            document.getElementById('gameUI').classList.remove('hidden');
+            startGameLoop();
+        };
+
+        function initGame() {
+            gameState.score = ON(0);
+            gameState.production = ON(0);
+            gameState.up = [ON(0), ON(0), ON(0)];
+            gameState.prestiges = Array(PRESTIGE_DATA.length).fill(ON(0));
+
+            loadGame();
+            buildUI();
+            updateUI(); // 초기 UI 업데이트
+        }
+
+        // === UI 동적 생성 ===
+        function buildUI() {
+            // 업그레이드 UI 생성
+            const upContainer = document.getElementById('upgradesContainer');
+            upContainer.innerHTML = '';
+            for (let i = 0; i < 3; i++) {
+                const btn = document.createElement('button');
+                btn.className = 'relative overflow-hidden group flex flex-col p-4 rounded-xl border text-left transition-all duration-200';
+                btn.onclick = () => buyUpgrade(i);
+                
+                btn.innerHTML = `
+                    <div class="flex justify-between items-start w-full z-10">
+                        <span class="font-bold text-lg">+${UPGRADE_AMOUNTS[i]} / 틱</span>
+                        <span class="bg-slate-900 px-2 py-1 rounded text-xs font-mono text-cyan-300 border border-slate-700">보유: <span id="upCount_${i}">0</span></span>
+                    </div>
+                    <div class="mt-2 text-sm text-slate-400 z-10 flex justify-between items-center w-full">
+                        <span>비용: <span class="font-mono text-white">${formatON(ON(UPGRADE_COSTS[i]))}</span></span>
+                        <span class="text-[10px] bg-slate-700 px-1.5 py-0.5 rounded text-slate-300">최대 구매</span>
+                    </div>
+                    <div class="shimmer-effect hidden"></div>
+                `;
+                upContainer.appendChild(btn);
+                DOM.upgrades.push({
+                    btn: btn,
+                    count: document.getElementById(`upCount_${i}`),
+                    shimmer: btn.querySelector('.shimmer-effect')
+                });
+            }
+
+            // 환생 UI 생성
+            const pContainer = document.getElementById('prestigeContainer');
+            pContainer.innerHTML = '';
+            for (let i = 0; i < PRESTIGE_DATA.length; i++) {
+                const data = PRESTIGE_DATA[i];
+                const div = document.createElement('div');
+                div.className = 'bg-slate-900 border border-slate-700 rounded-xl p-4 flex flex-col relative overflow-hidden group';
+                
+                div.innerHTML = `
+                    <div class="absolute bottom-0 left-0 h-1 bg-purple-900/30 w-full z-0">
+                        <div id="pProgress_${i}" class="h-full bg-purple-500 shadow-[0_0_10px_#a855f7] transition-all duration-200 ease-linear" style="width: 0%"></div>
+                    </div>
+                    
+                    <div class="flex justify-between items-center mb-2 z-10">
+                        <h3 class="font-bold text-purple-300 text-lg group-hover:text-purple-200 transition-colors">${data.name}</h3>
+                        <span class="text-xs font-mono bg-purple-900/50 text-purple-200 px-2 py-1 rounded border border-purple-700/50">
+                            보유: <span id="pCount_${i}">0</span>
+                        </span>
+                    </div>
+                    
+                    <p class="text-sm text-slate-400 mb-4 min-h-[40px] z-10 leading-snug break-keep">${data.desc}</p>
+                    
+                    <button id="pBtn_${i}" onclick="doPrestige(${i})" class="mt-auto py-2.5 px-4 rounded-lg font-bold transition-all duration-200 z-10 flex flex-col items-center justify-center">
+                        <span id="pBtnText1_${i}"></span>
+                        <span id="pBtnText2_${i}" class="text-[10px] mt-0.5 opacity-80"></span>
+                    </button>
+                `;
+                pContainer.appendChild(div);
+                DOM.prestiges.push({
+                    count: document.getElementById(`pCount_${i}`),
+                    progress: document.getElementById(`pProgress_${i}`),
+                    btn: document.getElementById(`pBtn_${i}`),
+                    btnText1: document.getElementById(`pBtnText1_${i}`),
+                    btnText2: document.getElementById(`pBtnText2_${i}`)
+                });
+            }
+        }
+
+        // === 핵심 계산 로직 ===
+        function calcProduction() {
+            let base = ON.add(
+                gameState.up[0].mul(UPGRADE_AMOUNTS[0]), 
+                gameState.up[1].mul(UPGRADE_AMOUNTS[1])
+            ).add(gameState.up[2].mul(UPGRADE_AMOUNTS[2]));
+            
+            if (base.eq(0)) return base;
+
+            const P = gameState.prestiges;
+
+            // 환생 1: 1.1 ^ R1
+            if (P[0].gt(0)) base = base.mul(ON.pow(1.1, P[0]));
+            
+            // 환생 2: 1 + 0.5 * R2
+            if (P[1].gt(0)) base = base.mul(ON.add(1, P[1].mul(0.5)));
+            
+            // 환생 3: 1.05 제곱
+            if (P[2].gt(0) && base.gt(1)) {
+                let r3_eff = ON.add(1, P[2].mul(0.05));
+                base = ON.pow(base, r3_eff);
+            }
+            
+            // 환생 4: log10(score)+1 의 팩토리얼 (Stirling 근사)
+            if (P[3].gt(0)) {
+                let logS = gameState.score.max(1).log10().floor().add(1);
+                let e = Math.E, pi = Math.PI;
+                let term1 = logS.mul(ON.log10(logS.div(e)));
+                let term2 = ON.log10(logS.mul(2 * pi)).mul(0.5);
+                let logFact = term1.add(term2).max(0);
+                let r4_eff = ON.pow(10, logFact).pow(P[3]);
+                base = base.mul(r4_eff);
+            }
+            
+            // 환생 5: log-log(score)+1 의 테트레이션
+            if (P[4].gt(0)) {
+                let llS = gameState.score.max(10).log10().max(1).log10().floor().add(1);
+                let height = Math.min(10, llS.toNumber()); 
+                let r5_eff = ON.arrow(10, 2, height);
+                base = base.mul(ON.pow(r5_eff, P[4]));
+            }
+            
+            // 환생 V2 계열 (거대 연산)
+            if (P[5].gt(0)) base = base.mul(ON.arrow(10, 3, P[5].add(1))); // 펜테이션
+            if (P[6].gt(0)) base = base.mul(ON.arrow(10, 4, P[6].add(1))); // 헥세이션
+            if (P[7].gt(0)) base = base.mul(ON.arrow(10, 5, P[7].add(1))); // 헵테이션
+            
+            return base;
+        }
+
+        function calcPrestigeReward(tierIdx) {
+            let data = PRESTIGE_DATA[tierIdx];
+            let logS = gameState.score.max(1).log10();
+            if (logS.lt(data.reqLog)) return ON(0);
+            
+            let ratio = logS.div(data.reqLog);
+            return ratio.pow(data.scale).floor();
+        }
+
+        // === 액션 로직 ===
+        function buyUpgrade(idx) {
+            let cost = ON(UPGRADE_COSTS[idx]);
+            if (gameState.score.gte(cost)) {
+                let amount = gameState.score.div(cost).floor();
+                gameState.score = gameState.score.sub(amount.mul(cost));
+                gameState.up[idx] = gameState.up[idx].add(amount);
+                fastUpdateUI(); // 구매 즉시 숫자 갱신
+            }
+        }
+
+        function doPrestige(tierIdx) {
+            let reward = calcPrestigeReward(tierIdx);
+            if (reward.lte(0)) return;
+
+            // 보상 지급
+            gameState.prestiges[tierIdx] = gameState.prestiges[tierIdx].add(reward);
+
+            // 하위 티어 초기화 (계층형 리셋)
+            gameState.score = ON(0);
+            gameState.up = [ON(0), ON(0), ON(0)];
+            for (let i = 0; i < tierIdx; i++) {
+                gameState.prestiges[i] = ON(0);
+            }
+            
+            updateUI();
+            saveGame();
+        }
+
+        // === 게임 루프 ===
+        function startGameLoop() {
+            // 메인 틱: 0.1초 (100ms) - 점수 및 생산량 계산
+            setInterval(() => {
+                const prod = calcProduction();
+                gameState.production = prod.mul(10); // 초당 생산량 표시용 (*10)
+                gameState.score = gameState.score.add(prod); // 0.1초치 점수 추가
+                
+                // 환생 3 자동 구매 로직
+                if (gameState.prestiges[2].gt(0)) {
+                    for(let i=0; i<3; i++) {
+                        let cost = ON(UPGRADE_COSTS[i]);
+                        if (gameState.score.gte(cost)) {
+                            let amount = gameState.score.div(cost).floor();
+                            gameState.score = gameState.score.sub(amount.mul(cost));
+                            gameState.up[i] = gameState.up[i].add(amount);
+                        }
+                    }
+                }
+                
+                fastUpdateUI();
+            }, 100);
+
+            // 서브 틱: 0.5초 (500ms) - 환생 버튼 상태 및 프로그레스바 갱신 (부하 방지)
+            setInterval(() => {
+                updatePrestigeUI();
+            }, 500);
+
+            // 오토 세이브: 10초
+            setInterval(() => saveGame(true), 10000);
+        }
+
+        // === UI 업데이트 (최적화) ===
+        // 매 0.1초마다 호출: 필요한 텍스트 노드만 변경하여 렌더링 부하 최소화
+        function fastUpdateUI() {
+            DOM.score.textContent = formatON(gameState.score);
+            DOM.prod.textContent = formatON(gameState.production);
+            
+            // 업그레이드 버튼 상태
+            for (let i = 0; i < 3; i++) {
+                DOM.upgrades[i].count.textContent = formatON(gameState.up[i]);
+                let cost = ON(UPGRADE_COSTS[i]);
+                let canBuy = gameState.score.gte(cost);
+                let btn = DOM.upgrades[i].btn;
+                let shim = DOM.upgrades[i].shimmer;
+                
+                if (canBuy) {
+                    btn.className = 'relative overflow-hidden group flex flex-col p-4 rounded-xl border text-left transition-all duration-200 bg-slate-700 border-slate-600 hover:bg-slate-600 hover:border-cyan-500 cursor-pointer shadow-md';
+                    shim.classList.remove('hidden');
+                } else {
+                    btn.className = 'relative overflow-hidden group flex flex-col p-4 rounded-xl border text-left transition-all duration-200 bg-slate-800/50 border-slate-800 opacity-60 cursor-not-allowed';
+                    shim.classList.add('hidden');
+                }
+            }
+
+            // 자동구매 뱃지 표시
+            if (gameState.prestiges[2].gt(0)) {
+                DOM.autoBuyBadge.classList.remove('hidden');
+            } else {
+                DOM.autoBuyBadge.classList.add('hidden');
+            }
+        }
+
+        // 매 0.5초 호출: 환생 패널 (상대적으로 무거운 계산)
+        function updatePrestigeUI() {
+            let logS = gameState.score.max(1).log10().toNumber();
+            
+            for (let i = 0; i < PRESTIGE_DATA.length; i++) {
+                DOM.prestiges[i].count.textContent = formatON(gameState.prestiges[i]);
+                
+                let data = PRESTIGE_DATA[i];
+                let reward = calcPrestigeReward(i);
+                let canPrestige = reward.gt(0);
+                let percent = Math.min(100, Math.max(0, (logS / data.reqLog) * 100));
+                
+                DOM.prestiges[i].progress.style.width = `${percent}%`;
+                
+                let btn = DOM.prestiges[i].btn;
+                if (canPrestige) {
+                    btn.className = 'mt-auto py-2.5 px-4 rounded-lg font-bold transition-all duration-200 z-10 flex flex-col items-center justify-center bg-purple-600 hover:bg-purple-500 text-white shadow-[0_0_15px_rgba(168,85,247,0.4)] hover:shadow-[0_0_25px_rgba(168,85,247,0.6)] cursor-pointer';
+                    DOM.prestiges[i].btnText1.innerHTML = `초기화 후 <span class="font-mono text-cyan-200">+${formatON(reward)}</span> 획득`;
+                    DOM.prestiges[i].btnText2.textContent = "클릭하여 환생하기";
+                } else {
+                    btn.className = 'mt-auto py-2.5 px-4 rounded-lg font-bold transition-all duration-200 z-10 flex flex-col items-center justify-center bg-slate-800 text-slate-500 border border-slate-700 cursor-not-allowed';
+                    DOM.prestiges[i].btnText1.textContent = `목표: e${data.reqLog}`;
+                    DOM.prestiges[i].btnText2.textContent = `(현재: ${percent.toFixed(1)}%)`;
+                }
+            }
+        }
+
+        // 전체 강제 업데이트 (초기화 또는 환생 직후)
+        function updateUI() {
+            fastUpdateUI();
+            updatePrestigeUI();
+        }
+
+        // === 유틸 함수 ===
+        function formatON(num) {
+            if (!num) return "0";
+            if (num.lt(1000)) return Math.floor(num.toNumber()).toString();
+            if (num.lt(1e6)) return Math.floor(num.toNumber()).toLocaleString();
+            
+            if (num.lt(ON.pow(10, 1000))) {
+                let log = num.log10().floor();
+                let mantissa = num.div(ON.pow(10, log)).toNumber();
+                return `${mantissa.toFixed(2)}e${log}`;
+            }
+            if (num.lt(ON.pow(10, 1e6))) {
+                return `e${Math.floor(num.log10().toNumber()).toLocaleString()}`;
+            }
+            
+            let loglog = num.log10().log10().floor();
+            return `ee${Math.floor(loglog.toNumber()).toLocaleString()}`;
+        }
+
+        // === 세이브 & 로드 ===
+        const SAVE_KEY = 'math_game_web_save';
+        
+        function saveGame(showIndicator = false) {
+            const data = {
+                score: gameState.score.toString(),
+                up: gameState.up.map(v => v.toString()),
+                prestiges: gameState.prestiges.map(v => v.toString())
+            };
+            localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+            
+            if (showIndicator) {
+                DOM.saveStatus.style.opacity = '1';
+                setTimeout(() => DOM.saveStatus.style.opacity = '0', 2000);
+            }
+        }
+
+        function loadGame() {
+            const saved = localStorage.getItem(SAVE_KEY);
+            if (saved) {
+                try {
+                    const data = JSON.parse(saved);
+                    if(data.score) gameState.score = ON(data.score);
+                    if(data.up) gameState.up = data.up.map(v => ON(v));
+                    if(data.prestiges) gameState.prestiges = data.prestiges.map(v => ON(v));
+                } catch (e) {
+                    console.error("세이브 로드 에러:", e);
+                }
+            }
+        }
+
+        function hardReset() {
+            if (confirm('정말로 모든 진행 상황을 초기화하시겠습니까?\n이 작업은 되돌릴 수 없습니다.')) {
+                localStorage.removeItem(SAVE_KEY);
+                location.reload();
+            }
+        }
+    </script>
+</body>
+</html>
 
 ```
